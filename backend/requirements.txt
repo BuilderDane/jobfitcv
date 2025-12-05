@@ -1,3 +1,5 @@
 fastapi
 uvicorn[standard]
 sqlmodel
+mangum
+openai>=1.0.0

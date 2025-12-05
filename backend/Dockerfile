@@ -15,4 +15,6 @@ COPY repositories /var/task/repositories
 COPY services /var/task/services
 
 # Lambda 入口
+# 对于 AWS Lambda Python 容器镜像，使用环境变量指定 handler
+ENV _HANDLER=main.handler
 CMD ["main.handler"]

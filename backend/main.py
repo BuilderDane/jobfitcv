@@ -15,7 +15,10 @@ app = FastAPI(
     version="0.1.0"
 )
 
-init_db()
+# 延迟初始化数据库，避免在 Lambda 启动时出错
+@app.on_event("startup")
+async def startup_event():
+    init_db()
 
 app.add_middleware(
     CORSMiddleware,

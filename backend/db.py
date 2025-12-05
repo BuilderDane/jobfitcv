@@ -3,8 +3,29 @@ import os
 
 # 1. 数据库地址
 # 优先从环境变量 DATABASE_URL 读；
-# 如果没有，就用一个本地的 SQLite 文件 jobfitcv.db
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./jobfitcv.db")
+# 如果没有，检测是否在 Lambda 环境中（使用多个 Lambda 环境变量判断）
+# Lambda 环境：使用 /tmp 目录（唯一可写目录）
+# 本地开发环境：使用当前目录
+
+def is_lambda_environment():
+    """检测是否在 AWS Lambda 环境中"""
+    # Lambda 环境会有这些环境变量之一
+    lambda_indicators = [
+        "LAMBDA_TASK_ROOT",      # Lambda 任务根目录
+        "AWS_EXECUTION_ENV",     # AWS 执行环境
+        "AWS_LAMBDA_FUNCTION_NAME",  # Lambda 函数名
+        "_LAMBDA_TELEMETRY_LOG_FD",  # Lambda 遥测日志文件描述符
+    ]
+    return any(os.getenv(indicator) for indicator in lambda_indicators)
+
+if os.getenv("DATABASE_URL"):
+    DATABASE_URL = os.getenv("DATABASE_URL")
+elif is_lambda_environment():
+    # Lambda 环境：使用 /tmp 目录（唯一可写目录）
+    DATABASE_URL = "sqlite:////tmp/jobfitcv.db"
+else:
+    # 本地开发环境
+    DATABASE_URL = "sqlite:///./jobfitcv.db"
 
 # 2. 创建一个全局的数据库引擎（engine）
 #    可以理解成：数据库“连接工厂”

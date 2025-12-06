@@ -33,15 +33,20 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push image to ECR
+      - name: Build docker image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          docker buildx build \
-          --platform linux/arm64 \
-          -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-          --push \
-          backend
+          docker build \
+            --platform linux/arm64 \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            backend
+
+      - name: Push image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
       - name: Update Lambda function to new image
         env:

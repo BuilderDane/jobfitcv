@@ -21,6 +21,9 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          # 确保支持多平台构建
+          platforms: linux/amd64,linux/arm64
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -33,19 +36,21 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build docker image
+      - name: Build and push docker image (arm64, Docker V2 schema)
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          docker build \
+          # 使用 buildx 构建 arm64 镜像并直接推送到 ECR
+          # --platform linux/arm64: 指定目标架构为 ARM64（与 Lambda arm64 架构一致）
+          # --push: 直接推送到 registry（跨平台构建必须使用 --push，不能 --load）
+          # --provenance=false --sbom=false: 禁用 OCI 相关特性，确保使用 Docker V2 schema（Lambda 要求）
+          docker buildx build \
+            --platform linux/arm64 \
+            --push \
+            --provenance=false \
+            --sbom=false \
             -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
             backend
-
-      - name: Push image to ECR
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        run: |
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
       - name: Update Lambda function to new image
         env:

@@ -14,7 +14,7 @@ COPY models.py /var/task/
 COPY repositories /var/task/repositories
 COPY services /var/task/services
 
-# Lambda 入口
-# 对于 AWS Lambda Python 容器镜像，使用环境变量指定 handler
-ENV _HANDLER=main.handler
+# Lambda 入口点配置
+# 告诉 Lambda 运行哪个函数：main.py 文件中的 handler 变量
+# 格式：文件名.变量名
 CMD ["main.handler"]

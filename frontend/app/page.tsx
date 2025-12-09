@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { previewMatch } from "../lib/api";
 
 export default function Home() {
   const [cvText, setCvText] = useState("");
@@ -38,22 +39,12 @@ export default function Home() {
     setMissingSkills([]);
 
     try {
-      const res = await fetch("http://127.0.0.1:8000/match/preview", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          cv_text: cvText,
-          job_description: jdText,
-        }),
+      const data = await previewMatch({
+        cv_text: cvText,
+        job_description: jdText,
       });
 
-      if (!res.ok) {
-        throw new Error(`Request failed with status ${res.status}`);
-      }
-
-      const data = await res.json();
+      // 正常从 API 赋值
       setMatchScore(data.match_score);
       setStrengths(data.strengths || []);
       setGaps(data.gaps || []);
@@ -80,9 +71,7 @@ export default function Home() {
         <h1 className="text-2xl font-semibold">
           JobFitCV · Match Preview (Proto)
         </h1>
-        <p className="text-sm text-slate-300">
-          输入简历和职位 JD，
-        </p>
+        <p className="text-sm text-slate-300">输入简历和职位 JD，</p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>

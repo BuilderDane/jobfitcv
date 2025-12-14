@@ -1,0 +1,707 @@
+python -m venv venv
+- 用 Python 自带工具创建一个“隔离小房间”（虚拟环境）。
+- 作用：这个项目装的包只放在 backend/venv 里，不污染你电脑全局。
+
+source venv/bin/activate
+- 进入这个“小房间”。
+- 进入后，你的终端会显示 (venv)，表示之后的 pip install 都装在这个房间里。
+
+重要规则（记住这 2 条就够）
+
+看到 (venv) ≠ 真的有 venv 文件夹
+删 venv 后一定要 deactivate 再重建
+退出当前虚拟环境（只做这一条）
+deactivate
+结果：
+(venv) 消失
+只剩 (base) 或什么都没有
+这一步只是切回系统环境，不会删任何文件
+
+pip install fastapi uvicorn
+- 在“小房间”里安装两个包：
+1.fastapi：写 API 的框架
+2.uvicorn：把 API 跑起来的服务器（本地启动用它）
+
+Backend 最小 API 设计说明（MVP v0）
+先跑通闭环：CV 文本 + JD 文本 → 结构化匹配结果（不存库、不上云）
+Base URL
+Local: http://127.0.0.1:8000
+
+backend/
+├─ main.py            # 路由入口
+├─ schemas.py         # Pydantic 请求/响应模型
+└─ services/
+   └─ match.py        # match 逻辑（先简单规则，后接 LLM）
+
+API = 接收输入 → 做处理 → 返回结构化输出。
+
+FastAPI 本质就是三步：
+
+定义函数
+用装饰器把 URL → 函数绑定
+返回 dict → 自动转 JSON
+@app.post("/preview-match")
+def preview_match(...):
+    return {...}
+
+你现在必须掌握的 6 个核心点（按重要性）
+1️⃣ 路由绑定（必须会)
+@app.post("/preview-match")
+def preview_match(payload: PreviewMatchRequest):
+
+你要懂什么
+URL /preview-match → 这个函数
+HTTP POST → 适合“提交数据做分析”
+函数就是 API 的“入口”
+
+面试能说：FastAPI 用装饰器把 HTTP 路由映射到 Python 函数
+
+2️⃣ 数据模型（必须会）
+class PreviewMatchRequest(BaseModel):
+    cv_text: str
+    jd_text: str
+class PreviewMatchResponse(BaseModel):
+    match_score: float
+    strengths: list[str]
+你要懂什么
+
+BaseModel = 输入/输出的数据合同
+
+自动校验、自动生成 /docs
+前后端靠它对齐
+面试关键词：schema / contract / validation
+
+3️⃣ 为什么用 set（必须会）
+overlap = cv_set & jd_set
+missing = jd_set - cv_set
+
+你要懂什么
+set 天然去重
+& 是交集（strengths）
+- 是差集（gaps）
+这是最小可解释匹配模型，非常工程化
+
+4️⃣ match_score 的定义（必须会）
+match_score = len(overlap) / max(len(jd_set), 1)
+你要懂什么
+分数 = 覆盖率
+不“拍脑袋”，有公式
+max(..., 1) 是防止除以 0
+面试能说：score is deterministic and explainable
+
+6️⃣ 返回 dict → JSON（必须会）
+return {
+    "match_score": round(match_score, 2),
+    ...
+}
+你要懂什么
+Python dict → JSON
+FastAPI 自动序列化
+和 response_model 对齐
+
+Landing 负责吸引 + 定位价值；Analyze 负责兑现价值。
+分成两页，既专业又不拖慢 2 天交付。
+
+.gitignore 必须在项目根目录
+原因（关键认知）
+
+.gitignore 是 Git 层面的规则
+
+它控制的是：整个仓库哪些文件不被提交
+
+放到 backend/ 里，frontend / venv / node_modules 都可能失控
+
+正确结构
+jobfitcv/
+├─ .gitignore   ← 必须在这里
+├─ backend/
+├─ frontend/
+
+
+开始前端 Landing（最小、可展示）。原因一句话：先让价值被看见，再让功能被验证。
+Step 1：在 frontend/ 初始化 Next.js（App Router）
+cd frontend
+npx create-next-app@latest . --ts --app --eslint --tailwind=false
+npm run dev
+
+
+Step 1：安装 Tailwind（在 frontend/）
+npm install -D tailwindcss postcss autoprefixer
+npx tailwindcss init -p
+
+-D 是什么？
+-D 是 --save-dev 的缩写，意思是：
+👉 把这些包安装为 开发依赖（devDependencies），只在开发、构建阶段使用，不会进入生产运行环境。
+
+npm i -D tailwindcss @tailwindcss/postcss postcss
+👉 为项目安装 Tailwind CSS 及其构建所需的工具，只用于开发阶段
+
+具体拆解：
+	•	npm i：安装依赖
+	•	tailwindcss：Tailwind CSS 本体
+	•	@tailwindcss/postcss：让 Tailwind 能被 PostCSS 处理（v4 必需）
+	•	postcss：CSS 构建管道工具
+	•	-D：告诉 npm「这些是开发时用的工具」
+
+   为什么它们是 dev 依赖？
+因为它们只负责：
+	•	编译 / 转换 CSS
+	•	构建阶段生成最终样式
+
+浏览器和线上环境 不直接运行它们。
+
+一句话记忆：
+👉 -D = 只在写代码和打包时用，不是产品运行时用
+
+
+# 2025年 12月14日
+下面我按生产级、零误导来带你完成 BFF（Backend-for-Frontend），这是 Google / 大厂 标准做法。
+结论（先给你全局判断）
+
+前端不要直连 FastAPI。
+用 Next.js API Route 作为中间层（BFF）：
+
+Browser
+  ↓
+Next.js /api/preview-match   ← 你前端唯一请求的 API
+  ↓
+FastAPI (local / AWS)
+
+好处（生产级）：
+
+❌ 不需要 CORS
+✅ 环境切换（本地 / AWS）零改前端代码
+✅ 安全（不暴露后端地址）
+✅ 面试官非常认可（系统设计正确）
+
+tep 1：定义环境变量（生产级规范）
+
+在 frontend/ 下创建 .env.local（不要提交到 git）：
+BACKEND_BASE_URL=http://127.0.0.1:8000
+规则（必须理解）：
+NEXT_PUBLIC_ 才会暴露给浏览器
+后端地址不应该暴露给浏览器
+BFF 在服务器侧读环境变量 → 安全
+
+Step 2：创建 BFF API Route（核心）
+新建文件：
+frontend/app/api/preview-match/route.ts
+
+Step 3：前端只请求自己的 API（关键）
+把 Analyze 页面里的 fetch 改成：
+const res = await fetch("/api/preview-match", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ cv_text: cvText, jd_text: jdText }),
+});
+
+👉 前端从此不知道 FastAPI 的存在。
+
+Step 4：重启前端
+npm run dev
+
+你必须掌握的 5 个核心知识点（面试必考）
+1️⃣ 什么是 BFF（Backend-for-Frontend）
+
+前端不直接请求真实后端
+
+一个“为前端定制的后端层”
+
+Google / Meta / Uber 的常规架构
+
+2️⃣ 为什么不用 CORS
+
+CORS 是跨域浏览器问题
+
+BFF → 同域请求 → 浏览器不再参与 CORS 判断
+
+3️⃣ 为什么环境变量不加 NEXT_PUBLIC_
+
+加了 = 浏览器可见
+
+后端地址、内部 API → 绝不能暴露
+
+4️⃣ Next.js API Route 是“服务器代码”
+
+跑在 Node.js / Edge
+
+可以安全访问 secrets
+
+可以转发、聚合、裁剪数据
+
+5️⃣ 这一步让你“像工程师”
+
+Demo 会 fetch 后端
+工程师会设计系统边界
+
+二、frontend/app/api/preview-match/route.ts 是什么？
+
+这是Next.js 的后端代码，不是前端页面。
+
+先给一句话定义（非常重要）
+
+route.ts = Next.js 内置的后端 API 文件
+
+二、frontend/app/api/preview-match/route.ts 是什么？
+
+这是Next.js 的后端代码，不是前端页面。
+先给一句话定义（非常重要）
+route.ts = Next.js 内置的后端 API 文件
+
+1️⃣ Next.js App Router 的规则
+在 app/ 目录下：
+| 目录结构                   | 含义            |
+| ---------------------- | ------------- |
+| `app/page.tsx`         | `/` 页面        |
+| `app/analyze/page.tsx` | `/analyze` 页面 |
+| `app/api/xxx/route.ts` | `/api/xxx` 接口 |
+
+所以：
+frontend/app/api/preview-match/route.ts
+自动变成一个 API：
+POST /api/preview-match
+👉 你不用注册路由，Next.js 自动帮你做了
+
+四、为什么文件叫 route.ts，不是别的名字？
+
+这是 Next.js 13+ App Router 的硬性约定：
+
+页面：page.tsx
+
+布局：layout.tsx
+
+API：route.ts
+
+不是随便起名
+是 框架约定优于配置（Convention over Configuration）
+
+这也是 Google / Meta 很推崇的工程哲学。
+
+五、你需不需要理解 route.ts 里的代码？
+答案：必须理解，这是你“工程师身份”的分水岭。
+
+我帮你拆成 5 行关键逻辑，你只要吃透这 5 行。
+完整代码（你已经有）
+export async function POST(req: NextRequest) {
+👉 定义一个 HTTP POST 接口
+
+const body = await req.json();
+👉 读取前端传来的 JSON（cv_text / jd_text
+
+const backendUrl = process.env.BACKEND_BASE_URL;
+👉 从 服务器环境变量读取 FastAPI 地址
+（浏览器永远看不到）
+
+const res = await fetch(`${backendUrl}/preview-match`, { ... });
+👉 把请求转发给 FastAPI
+这一步就是 “代理 / BFF” 的核心
+
+return NextResponse.json(data, { status: res.status });
+👉 把 FastAPI 的结果 原样返回给前端
+
+六、用一句工程师的话总结这层（面试可用）
+We use Next.js API routes as a BFF layer to proxy requests to FastAPI,
+avoiding CORS, isolating backend infrastructure, and enabling clean environment switching.
+
+
+确认后，我会继续下一步：
+生产级错误处理 + loading / error 状态（真正可用的产品）
+
+route.ts 虽然在 frontend/，但它是 Next.js 服务器端 API（BFF）：浏览器请求它，它再转发给 FastAPI。
+
+import Link from "next/link";
+这是 Next.js 的页面内跳转组件，不是普通的 HTML <a>。
+👉 用于在 Next.js 应用里做“客户端路由跳转”
+从一个页面跳到另一个页面，不刷新整个页面，体验更快。
+
+<Link href="/analyze">
+  Try it now
+</Link>
+含义是：
+	•	点击按钮
+	•	跳转到 /analyze
+	•	实际会打开：app/analyze/page.tsx
+	•	不刷新页面、不重新加载 JS
+
+   Next.js 是 App Router + SPA 行为，Link 是标准做法。
+   为什么不用 <a href="/analyze">？
+   <a>:整页刷新 ,慢, 重新下载 JS, 不适合 SPA
+
+为什么要在顶部 import？
+因为 Link 是一个 React 组件，不是浏览器原生标签
+用组件就必须 import
+
+一句话总结
+
+Link = Next.js 的“智能导航按钮”
+专门用来在页面之间跳转，快、稳定、生产级。
+
+确保 BFF 已存在（你之前理解的 route.ts）
+文件：frontend/app/api/preview-match/route.ts
+
+你需要掌握的点（最少）
+
+app/analyze/page.tsx → 这个文件名/路径 决定 URL：/analyze
+
+route.ts → 服务器端 API：浏览器打 /api/preview-match，它再转发到 FastAPI
+
+.env.local → 只给服务器读（不加 NEXT_PUBLIC_）
+
+
+“质量与鲁棒性”
+你需要掌握的知识点
+
+Token 清洗是 NLP 的地基：不清洗 → 产品看起来“像玩具”
+
+Stopwords（停用词）：高频但几乎不带信息的词（am, i, the…）
+
+评分要和“有效技能”对齐：否则出现“Match=1 但实际上没技能”的错觉
+
+
+你现在看到的问题（本质）
+
+当前算法是 单词级（unigram）：
+
+user experience 被拆成 user + experience
+
+strong background 被拆成 strong + background
+
+👉 在真实招聘里，技能是“短语”，不是词。
+
+正确的工程决策（Google 级）
+
+在接 AI / Embedding 之前，先做可控的短语层（n-gram + 保护短语）：
+Rule-based phrase layer →
+later swap to LLM / Embedding
+（接口不变，底层可替换）
+
+ob skill taxonomy = 工作技能的分类体系
+taxonomy = 技能的 Information Architecture
+这是设计师 → AI Product Engineer 的完美迁移。
+
+二、生产级正确架构（你现在就该走的）
+总体架构（记住这张“脑图”）
+CV / JD 文本
+   ↓
+Skill Extraction（LLM / rule）
+   ↓
+Skill Normalization（O*NET taxonomy）
+   ↓
+Vector Search（RAG）
+   ↓
+Reasoning & Suggestions（LLM）
+
+下面是我作为工程负责人对 O*NET 数据选择 + 生产级 Schema 的权威判断（Step 1）。
+Step 1：O*NET 该选哪些数据（上线可用 + 可扩展）
+Step 1：生产级数据建模（不是极简，是可上线的最小集合）
+
+一、先把“世界观”摆正（最重要）
+数据库只干一件事：
+👉 把现实世界，拆成几张表，存得清清楚楚、不打架
+
+二、什么是「多对多」（你卡住的第一个点）
+现实世界的真相
+	•	一个职业 👉 需要 很多技能
+	•	一个技能 👉 也会被 很多职业用到
+👉 这在数据库里，叫 多对多（Many-to-Many）
+
+三、数据库的标准解法：中间表（关联表）
+正确结构（这是面试标准答案）
+
+
+
+1) 准备 O*NET 数据（你手动下载即可）
+把 O*NET Database 解压到一个目录，例如：
+jobfitcv/
+  data/onet/
+    Occupation Data.txt
+    Content Model Reference.txt
+    Scales Reference.txt
+    Skills.txt
+    Knowledge.txt
+    Abilities.txt
+    Work Activities.txt
+    Task Statements.txt
+    Tools and Technology.txt
+
+
+
+2) 在 backend 安装数据库驱动
+在 backend/：
+pip install psycopg2-binary
+面试点：psycopg2 是 Python ↔ Postgres 的驱动（driver），负责“连接 + 执行 SQL”。
+
+3) 配置数据库连接（生产级方式：环境变量）
+在终端里（或写进 .env 再用 dotenv，后面再加）：
+export DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/DBNAME"
+
+
+你跑完后要验证的 4 个 SQL（面试官最爱问“怎么验证数据”）
+在数据库里执行：
+select count(*) from occupations;
+select count(*) from skills;
+select count(*) from occupation_skill;
+select count(*) from kb_chunks;
+以及抽样看一行：
+select * from occupations limit 3;
+select * from skills limit 10;
+select * from occupation_skill limit 10;
+
+
+注意问题:
+这说明：你这次运行 python 用的是 Anaconda 的 python，不是 venv 的 python。 所以你之前在 venv 安装的包，可能这次没用上（环境混了）。
+
+✅ 结论：以后执行脚本用这个最稳：
+cd backend
+source venv/bin/activate
+python scripts/import_onet.py
+
+只做：O*NET → 数据库“建模设计”（纸上设计）
+为什么？
+
+数据库是你弱项
+面试最爱问：“你这个 schema 怎么设计的？”
+设计清楚了，写 SQL / import 才不会乱
+
+我们现在做 O*NET→Postgres 的生产级建模。我这次只讲 1 件事：
+把 O*NET 的“原始 txt 文件”转成你数据库里最关键的 4 张表（上线可用，后面可扩展到 RAG/向量）。
+
+Step 1：4 张核心表（你必须懂）
+1) occupations（职业）
+
+**作用：**给所有技能/任务一个“职业锚点”。
+来源：Occupation Data.txt
+
+字段（最小可用）：
+
+onetsoc_code（主键，职业 ID）
+title
+description
+
+(onetsoc_code 是 O*NET-SOC Code 的缩写。
+onetsoc_code = 职业世界的身份证号码
+SOC = Standard Occupational Classification（美国官方职业分类体系）)
+
+2) entities（统一的“可匹配实体”）
+**作用：**把 Skills / Knowledge / Abilities / Work Activities / Technology / Tools 都当成一种东西：实体。
+这样你以后扩展不会不断加新表。
+
+字段：
+entity_id（主键）
+type（skill/knowledge/ability/activity/tech/tool）
+name（唯一，建议加 unique）
+source_ref（可选：原始 Element ID 或工具的 code）
+面试说法：用 统一实体模型降低复杂度，便于扩展和检索。
+
+3) occupation_entity（职业 ↔ 实体 的关系 + 权重）
+
+**作用：**做匹配分数的核心：某职业需要哪些实体，重要程度是多少。
+来源：Skills.txt / Knowledge.txt / Abilities.txt / Work Activities.txt（还有后面 tech/tool）
+
+字段：
+onetsoc_code（FK）
+entity_id（FK）
+scale（importance / level）
+value（数值）
+主键：(onetsoc_code, entity_id, scale)
+面试说法：这是经典 many-to-many with attributes（多对多 + 关系属性）。
+
+4) kb_chunks（给 RAG 的文本知识库）
+
+**作用：**把“任务/活动/工具描述”等自然语言放进来，后面做 embedding 检索。
+来源：
+Task Statements.txt
+（可选）Work Activities 的描述类字段
+Tools/Tech 相关文件
+字段：
+chunk_id（主键）
+source（tasks / activities / tools / tech）
+onetsoc_code（可空）
+entity_id（可空）
+content（文本）
+面试说法：RAG 需要“可检索文本块”，并且要能回链到职业/实体用于解释与引用。
+
+这一步我只做一件事：给你“最小但生产级”的建表 SQL + 清晰解释。
+不导数据、不连 AWS、不跑脚本。
+
+Step 2：数据库结构（只 4 张表）
+你可以把数据库想成 4 个盒子。
+
+1️⃣ occupations（职业盒子）
+世界上有哪些岗位
+CREATE TABLE occupations (
+  onetsoc_code TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT
+);
+
+你需要懂的点
+
+onetsoc_code = 官方职业 ID（比如 15-1252.00）
+这是所有技能的“锚点”
+面试一句话：
+“所有技能和任务都必须属于某个职业”
+
+2️⃣ entities（统一技能盒子）
+所有“可匹配的东西”，不管是技能、工具、能力
+CREATE TABLE entities (
+  entity_id SERIAL PRIMARY KEY,
+  type TEXT NOT NULL,
+  name TEXT NOT NULL,
+  source_ref TEXT,
+  UNIQUE (type, name)
+);
+
+type 是什么？
+skill
+knowledge
+ability
+activity
+tech
+tool
+
+为什么这样设计（很重要）
+不拆 10 张表，降低复杂度
+以后加新类型（比如 soft skill）不用改结构
+面试说法
+“我用统一 entity 模型，避免 schema 爆炸，方便 RAG 和扩展。”
+
+3️⃣ occupation_entity（关系 + 权重）
+某个职业 → 需要哪些实体 → 有多重要
+CREATE TABLE occupation_entity (
+  onetsoc_code TEXT REFERENCES occupations(onetsoc_code),
+  entity_id INT REFERENCES entities(entity_id),
+  scale TEXT,
+  value FLOAT,
+  PRIMARY KEY (onetsoc_code, entity_id, scale)
+);
+
+12 岁版本理解
+一个岗位需要很多技能
+一个技能也属于很多岗位
+中间这张表：记录“关系 + 强度”
+value 是什么？
+比如：重要程度、熟练程度（来自 O*NET）
+面试关键词
+many-to-many
+relationship attributes
+
+4️⃣ kb_chunks（给 AI/RAG 用的文本）
+给 AI 看的“知识段落”
+CREATE TABLE kb_chunks (
+  chunk_id SERIAL PRIMARY KEY,
+  source TEXT NOT NULL,
+  onetsoc_code TEXT,
+  entity_id INT,
+  content TEXT NOT NULL
+);
+
+它解决什么问题
+- 技能不只是“词”，还有解释
+- RAG 检索靠的是 文本块
+例子
+- 某职业的一条任务描述
+- 某工具的用途说明
+
+面试说法（记一句）：
+“Early production uses Single-AZ, scale HA later when traffic justifies cost.”
+
+面试一句话：
+“Start with burstable instance, scale vertically when load increases.”
+
+面试时可说：Multi-AZ subnet group for high availability
+No = 数据库不暴露在公网
+只能被你 VPC 里的后端访问（更安全）
+Production 标准答案
+
+Databases should not be publicly accessible.
+
+面试用语
+
+Enabled Performance Insights to monitor query performance.
+✅ 必须开
+
+在你本地装 psql（PostgreSQL 客户端）
+在 Terminal 里 只敲这一行：
+brew install postgresql@16
+解释一句话：
+psql 就是“人类 ↔ PostgreSQL 数据库”的官方对话工具。
+
+psql -h jobfitcv-postgres.cuzwwyy28wm9.us-east-1.rds.amazonaws.com -p 5432 -U jobfitcv postgres
+解释给你听：
+-h：数据库在哪（AWS 给你的 endpoint）
+-U：用户名
+postgres：默认存在的系统数据库
+
+👉 这是“进门用的大厅”，不是你最终要用的 DB。
+如果它问你密码，输入你刚刚设置的 master password。
+
+nslookup jobfitcv-postgres.cuzwwyy28wm9.us-east-1.rds.amazonaws.com 8.8.8.8
+👉 你当前网络环境“完全无法做外部 DNS 查询”
+（包括 8.8.8.8 都超时）
+👉 在这种网络下：本地直连 AWS RDS 永远不可能成功。
+
+
+✅ 正确且生产级的解决方案（直接走）
+
+我们不再折腾你本地网络，改用：
+
+👉 AWS CloudShell（推荐 & 标准做法）
+这是真正生产级的方式：
+在 AWS 自己的云环境里
+DNS / VPC / Security Group 全部天然可用
+大厂就是这么连数据库的
+
+这是架构选择，不是对错）
+✅ 路线 A（推荐 / 生产标准 / 面试加分）
+用 EC2 作为 Bastion（跳板机）
+EC2 = Amazon Elastic Compute Cloud
+Mac
+ ↓
+EC2（同 VPC）
+ ↓
+RDS
+✔ 真正的 production
+✔ 所有公司都这么干
+✔ 你会学到 VPC / SG / DB 网络
+❌ 稍微多 5–10 分钟配置
+
+VPC = Amazon Virtual Private Cloud
+你可以把它理解成：你在 AWS 里的一块私有网络
+（像你自己的“内网”，里面可以放 EC2、RDS，用安全组/子网控制谁能访问谁）。
+
+一句话把它俩关系说清楚
+	•	VPC = 你自己的私有小区（网络）
+	•	EC2 = 小区里的一套房（服务器）
+把 EC2 放进同一个 VPC 里，才能用“内网方式”安全地连 RDS。
+
+先讲清两个词（非常重要）
+什么是 EC2
+
+EC2 = 一台你租来的云电脑（服务器）
+像一台 24 小时开机的 Linux 电脑
+有 CPU / 内存 / 硬盘
+可以装软件（psql、Python、Docker…）
+可以放在 AWS 的“内网”里
+👉 我们要用它当 “中间人电脑” 来连数据库。
+
+什么是 VPC
+
+VPC = AWS 给你的一整个“私人内网”
+
+想象一个公司：
+
+VPC = 公司大楼
+
+EC2 = 办公室里的电脑
+
+RDS = 机房里的数据库服务器
+
+外面的人（你家 Mac）进不来
+
+👉 同一个 VPC 里的资源，默认可以互相通信
+👉 你现在的 RDS 就在一个 VPC 里
+
+我们现在要做什么（一句话）
+在“和 RDS 同一个 VPC”里，创建一台最小的 EC2
+然后用这台 EC2 去连 RDS。

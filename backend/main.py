@@ -1,98 +1,125 @@
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from mangum import Mangum  
-
-from sqlmodel import Session, select
-from db import engine
-
-from schemas import MatchPreviewRequest, MatchPreviewResponse
-from services.matching import analyze_match
-from db import init_db, get_session
-from repositories.match_repo import save_match_record
-from models import MatchRecord
+from pydantic import BaseModel
+app = FastAPI(title="JobFitCV API", version="0.0.1")
 
 
-# 创建 FastAPI 应用
-app = FastAPI(
-    title="JobFitCV API",
-    version="0.1.0"
-)
+PHRASES = [
+    "user experience",
+    "ui ux",
+    "ui/ux",
+    "product engineer",
+    "product engineering",
+    "ai product engineer",
+]
 
-# 延迟初始化数据库，避免在 Lambda 启动时出错
-# 使用 startup 事件，在应用启动时初始化数据库
-@app.on_event("startup")
-async def startup_event():
-    init_db()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-    "https://jobfitcv.com",
-    "https://www.jobfitcv.com",
-     "http://localhost:3000", ] # 本地调试时可以留着],
+# ---------- Data Models (Request / Response) ----------
 
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+class PreviewMatchRequest(BaseModel):
+    cv_text: str
+    jd_text: str
+
+
+class PreviewMatchResponse(BaseModel):
+    match_score: float
+    strengths: list[str]
+    gaps: list[str]
+    suggestions: list[str]
+    cv_skills: list[str]
+    jd_skills: list[str]
+
+
+# ---------- Helpers (MVP logic) ----------
+
+def _extract_keywords(text: str) -> set[str]:
+    text = text.lower()
+
+    tokens: list[str] = []
+    cur: list[str] = []
+
+    for ch in text:
+        if ch.isalnum() or ch in ["+", "-", "."]:
+            cur.append(ch)
+        else:
+            if cur:
+                tokens.append("".join(cur))
+                cur = []
+    if cur:
+        tokens.append("".join(cur))
+
+    # 基础停用词（结构词）
+    stop = {
+    # 结构词
+    "and", "or", "the", "a", "an", "to", "of", "in", "on", "for", "with",
+    # 代词/冠词/常见无信息词
+    "i", "me", "my", "you", "your", "we", "our", "they", "their",
+    "is", "am", "are", "was", "were", "be", "been", "being",
+    "this", "that", "these", "those",
+    # 常见动词（JD/CV里很容易污染结果）
+    "looking", "build", "built", "use", "used", "using", "need", "needs",
+    "want", "wants", "seeking", "seeks", "require", "requires", "required",
+    "experience", "experiences",
+}
+
+
+    cleaned = set()
+    for t in tokens:
+        t = t.strip(".")          # 去尾部标点，如 cd.
+        if len(t) < 2:
+            continue
+        if t in stop:
+            continue
+        cleaned.add(t)
+
+    return cleaned
+
+
+
+# ---------- Routes ----------
 
 @app.get("/")
-def read_root():
-    return {"message": "JobFitCV backend auto-updated via CI/CD!!"}
+def root():
+    return {"message": "JobFitCV API running. Go to /docs"}
+
 
 @app.get("/health")
-def health_check():
+def health():
     return {"status": "ok"}
 
-@app.get("/meta")
-def get_meta():
-    return {
-        "app": "JobFitCV",
-        "version": "0.1.0",
-        "description": "API for matching CVs to job descriptions."
-    }
 
-@app.get("/db/health")
-def db_health():
-    """简单检查数据库是否可用 + 看看现在有多少条 MatchRecord"""
-    try:
-        with Session(engine) as s:
-            # 只做一个很轻量的查询
-            rows = s.exec(select(MatchRecord)).all()
-            return {
-                "status": "ok",
-                "records_count": len(rows),
-            }
-    except Exception as e:
-        # 如果连不上 / 查询出错，就返回 error
+@app.post("/preview-match", response_model=PreviewMatchResponse)
+def preview_match(payload: PreviewMatchRequest):
+    cv = payload.cv_text.strip()
+    jd = payload.jd_text.strip()
+
+    if not cv or not jd:
         return {
-            "status": "error",
-            "detail": str(e),
+            "match_score": 0.0,
+            "strengths": [],
+            "gaps": ["cv_text and jd_text are required"],
+            "suggestions": [],
+            "cv_skills": [],
+            "jd_skills": [],
         }
 
+    cv_set = _extract_keywords(cv)
+    jd_set = _extract_keywords(jd)
 
-@app.post("/match/preview", response_model=MatchPreviewResponse)
-def preview_match(payload: MatchPreviewRequest):
-    # 1. 调用匹配服务，拿到结果
-    data = analyze_match(
-        cv_text=payload.cv_text,
-        jd_text=payload.job_description,
-    )
+    overlap = cv_set & jd_set          # strengths: in both CV and JD
+    missing = jd_set - cv_set          # gaps: in JD but not in CV
 
-    # 2. 打开一个数据库 Session，写入 MatchRecord
-    with get_session() as session:
-        save_match_record(
-            session=session,
-            payload=payload,
-            result=data,
-            user_id=None,  # 以后接入登录系统再填真实用户
-        )
+    # match_score = how much of JD keywords are covered by CV (0~1)
+    match_score = len(overlap) / max(len(jd_set), 1)
 
-    # 3. 再把结果返回给前端
-    return MatchPreviewResponse(**data)
+    strengths = sorted(list(overlap))[:10]
+    gaps = sorted(list(missing))[:10]
+    suggestions = [f"Add evidence for: {k}" for k in gaps[:5]]
 
-handler = Mangum(app)
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    return {
+        "match_score": round(match_score, 2),
+        "strengths": strengths,
+        "gaps": gaps,
+        "suggestions": suggestions,
+        "cv_skills": sorted(list(cv_set))[:20],
+        "jd_skills": sorted(list(jd_set))[:20],
+    }
